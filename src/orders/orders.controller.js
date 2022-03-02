@@ -2,180 +2,189 @@ const path = require("path");
 const orders = require(path.resolve("src/data/orders-data"));
 const nextId = require("../utils/nextId");
 
-//Functional Middleware functions:
-const orderExists = (req, res, next) => {
-  const orderId = req.params.orderId;
-  res.locals.orderId = orderId;
-  const foundOrder = orders.find((order) => order.id === orderId);
-  if (!foundOrder) {
-    return next({
-      status: 404,
-      message: `Order not found: ${orderId}`,
-    });
-  }
-  res.locals.order = foundOrder;
-};
+// LIST
+function list(req, res) {
+  res.status(200).json({ data: orders });
+}
 
-const orderValidDeliverTo = (req, res, next) => {
-  const { data = null } = req.body;
-  res.locals.newOD = data;
-  const orderdeliverTo = data.deliverTo;
-  if (!orderdeliverTo || orderdeliverTo.length === 0) {
+// READ
+function read(req, res) {
+  res.status(200).json({ data: res.locals.order });
+}
+
+// CREATE
+function create(req, res) {
+  const {
+    data: { deliverTo, mobileNumber, status, dishes },
+  } = req.body;
+
+  const newOrder = {
+    id: nextId(),
+    deliverTo,
+    mobileNumber,
+    status,
+    dishes,
+  };
+
+  orders.push(newOrder);
+  res.status(201).json({ data: newOrder });
+}
+
+// UPDATE
+function update(req, res, next) {
+  const {
+    data: { id, deliverTo, mobileNumber, status, dishes },
+  } = req.body;
+
+  // if no id keep it the same, else update it
+  if (!id) {
+    res.locals.order.id = res.locals.order.id;
+  } else {
+    res.locals.order.id = id;
+  }
+
+  res.locals.order.status = status;
+  res.locals.order.deliverTo = deliverTo;
+  res.locals.order.mobileNumber = mobileNumber;
+  res.locals.order.dishes = dishes;
+
+  res.status(200).json({ data: res.locals.order });
+}
+
+// DELETE
+function destroy(req, res, next) {
+  if (res.locals.order.status !== "pending") {
     return next({
       status: 400,
-      message: "Order must include a deliverTo",
+      message: "Can't delete an order unless it's pending!",
     });
   }
-};
+  const index = orders.findIndex((order) => order.id === res.locals.order.id);
+  if (index > -1) {
+    orders.splice(index, 1);
+  }
+  res.sendStatus(204);
+}
 
-const orderHasValidMobileNumber = (req, res, next) => {
-  const orderMobileNumber = res.locals.newOD.mobileNumber;
-  if (!orderMobileNumber || orderMobileNumber.length === 0) {
-    return next({
+// VALIDATION
+function isValidOrder(req, res, next) {
+  const { orderId } = req.params;
+  const foundOrder = orders.find((order) => order.id === orderId);
+
+  if (foundOrder) {
+    res.locals.order = foundOrder;
+    return next();
+  } else {
+    next({
+      status: 404,
+      message: `Order id could not be found: ${orderId}`,
+    });
+  }
+}
+
+function hasValidInformation(req, res, next) {
+  const {
+    data: { deliverTo, mobileNumber, dishes },
+  } = req.body;
+
+  if (!deliverTo) {
+    next({
+      status: 400,
+      message: "Order must include deliverTo",
+    });
+  }
+
+  if (!mobileNumber) {
+    next({
       status: 400,
       message: "Order must include a mobileNumber",
     });
   }
-};
 
-const orderHasDishes = (req, res, next) => {
-  const orderDishes = res.locals.newOD.dishes;
-  if (!orderDishes || !Array.isArray(orderDishes) || orderDishes.length <= 0) {
-    return next({
+  if (!dishes) {
+    next({
+      status: 400,
+      message: "Order must include a dish",
+    });
+  }
+
+  if (dishes.length === 0 || !Array.isArray(dishes)) {
+    next({
       status: 400,
       message: "Order must include at least one dish",
     });
   }
-  res.locals.dishes = orderDishes;
-};
-
-const orderHasValidDishes = (req, res, next) => {
-  const orderDishes = res.locals.dishes;
-  orderDishes.forEach((dish) => {
-    const dishQuantity = dish.quantity;
-    if (!dishQuantity || typeof dishQuantity != "number" || dishQuantity <= 0) {
-      return next({
-        status: 400,
-        message: `Dish ${orderDishes.indexOf(
-          dish
-        )} must have a quantity that is an integer greater than 0`,
-      });
+  // error validation for invalid dish quantity
+  let message = "";
+  dishes.forEach((dish, index) => {
+    if (dish.quantity <= 0 || typeof dish.quantity !== "number") {
+      message = `Dish ${index} must have a quantity that is an integer greater than 0`;
     }
   });
-};
-
-const orderIdMatches = (req, res, next) => {
-  const paramId = res.locals.orderId;
-  const { id = null } = res.locals.newOD;
-  if (!id || id === null) {
-    res.locals.newOD.id = res.locals.orderId;
-  } else if (paramId != id) {
-    return next({
+  if (message) {
+    next({
       status: 400,
-      message: `Order id does not match route id. Order: ${id}, Route: ${paramId}`,
+      message: `${message}`,
     });
+  } else {
+    next();
   }
-};
+}
 
-const incomingStatusIsValid = (req, res, next) => {
-  const { status = null } = res.locals.newOD;
-  if (!status || status.length === 0 || status === "invalid") {
+function hasValidStatus(req, res, next) {
+  const {
+    data: { status },
+  } = req.body;
+
+  if (
+    !status ||
+    (status !== "pending" &&
+      status !== "preparing" &&
+      status !== "out-for-delivery" &&
+      status !== "delivered")
+  ) {
     return next({
       status: 400,
       message:
         "Order must have a status of pending, preparing, out-for-delivery, delivered",
     });
   }
-};
 
-const extantStatusIsValid = (req, res, next) => {
-  const { status = null } = res.locals.order;
   if (status === "delivered") {
     return next({
       status: 400,
       message: "A delivered order cannot be changed",
     });
   }
-};
 
-const extantStatusIsPending = (req, res, next) => {
-  const { status = null } = res.locals.order;
-  if (status !== "pending") {
+  next();
+}
+
+function hasValidId(req, res, next) {
+  const {
+    data: { id },
+  } = req.body;
+
+  if (id && id !== res.locals.order.id) {
     return next({
       status: 400,
-      message: "An order cannot be deleted unless it is pending",
+      message: `Order id does not match route id. Dish: ${id}, Route: ${res.locals.order.id}`,
     });
   }
-};
 
-// Middleware Functions
-const createValidation = (req, res, next) => {
-  orderValidDeliverTo(req, res, next);
-  orderHasValidMobileNumber(req, res, next);
-  orderHasDishes(req, res, next);
-  orderHasValidDishes(req, res, next);
   next();
-};
-
-const readValidation = (req, res, next) => {
-  orderExists(req, res, next);
-  next();
-};
-
-const updateValidation = (req, res, next) => {
-  orderExists(req, res, next);
-  orderValidDeliverTo(req, res, next);
-  orderHasValidMobileNumber(req, res, next);
-  orderHasDishes(req, res, next);
-  orderHasValidDishes(req, res, next);
-  orderIdMatches(req, res, next);
-  incomingStatusIsValid(req, res, next);
-  extantStatusIsValid(req, res, next);
-  next();
-};
-
-const deleteValidation = (req, res, next) => {
-  orderExists(req, res, next);
-  extantStatusIsPending(req, res, next);
-  next();
-};
-
-//Handlers:
-function create(req, res) {
-  const newOrderData = res.locals.newOD;
-  newOrderData.id = nextId();
-  orders.push(newOrderData);
-  res.status(201).json({ data: newOrderData });
-}
-
-function read(req, res) {
-  res.status(200).json({ data: res.locals.order });
-}
-
-function update(req, res) {
-  const newData = res.locals.newOD;
-  const oldData = res.locals.order;
-  const index = orders.indexOf(oldData);
-  for (const key in newData) {
-    orders[index][key] = newData[key];
-  }
-  res.status(200).json({ data: orders[index] });
-}
-
-function list(req, res) {
-  res.status(200).json({ data: orders });
-}
-
-function destroy(req, res) {
-  const index = orders.indexOf(res.locals.order);
-  orders.splice(index, 1);
-  res.sendStatus(204);
 }
 
 module.exports = {
-  create: [createValidation, create],
-  read: [readValidation, read],
-  update: [updateValidation, update],
-  delete: [deleteValidation, destroy],
   list,
+  read: [isValidOrder, read],
+  create: [hasValidInformation, create],
+  update: [
+    isValidOrder,
+    hasValidInformation,
+    hasValidId,
+    hasValidStatus,
+    update,
+  ],
+  delete: [isValidOrder, destroy],
 };
